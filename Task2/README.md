@@ -14,7 +14,7 @@
 
 Заполните файл text.txt текстом и скомпилируйте
 
-`clang++ --std=c++20 server.cpp -licuuc -licuio -o server`
+`clang++ --std=c++20 server.cpp str_utils.cpp -licuuc -licuio -o server`
 
 `clang++ --std=c++20 client.cpp -lcpr -lcurl -o client`
 

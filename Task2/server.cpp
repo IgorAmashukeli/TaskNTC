@@ -1,85 +1,88 @@
-#include "regex_str.h"
+#include "str_utils.h"
 #include <cassert>
 #include <crow.h>
+#include <string>
 #include <unicode/brkiter.h>
 #include <unicode/unistr.h>
 #include <unicode/utypes.h>
 #include <vector>
 
-using Tokenizer = std::unique_ptr<icu::BreakIterator>;
+enum { PREF_SENT_SIZE = 200 };
 
-Tokenizer prepareTokenizer(const icu::UnicodeString &txt) {
-  auto status = U_ZERO_ERROR;
-  auto tok = Tokenizer(
-      icu::BreakIterator::createSentenceInstance(icu::Locale{"ru_RU"}, status));
-  if (U_FAILURE(status)) {
-    std::cerr << "Ошибка создания BreakIterator" << std::endl;
-    return nullptr;
-  }
-  tok->setText(txt);
-  return std::move(tok);
+crow::json::wvalue FindSets(const std::string &s) {
+    crow::json::wvalue res;
+
+    auto coords = regex_str::ExtractCoordinates(s);
+    auto words = tokenizer::TokenizeToWords(s);
+
+    auto sets = coordinate_sets::FindSets(coords, coordinate_sets::FindEps(coords), 500);
+
+    auto set_marks = coordinate_sets::CalcSetInfo(words, sets);
+
+    for (size_t i = 0; i < set_marks.size(); ++i) {
+        res[coordinate_sets::kSetNames[i]] =
+            coordinate_sets::ArrOfCoordinateSetsToString(set_marks[i]);
+    }
+
+    return res;
 }
 
-std::vector<std::string> tokenize_to_sentences(const std::string &text) {
-  std::vector<std::string> result;
-  auto txt = icu::UnicodeString::fromUTF8(text);
-  auto tok = prepareTokenizer(txt);
-  if (!tok) {
-    return {};
-  }
+crow::json::wvalue FindCoordinate200Sentences(const std::string &s) {
+    crow::json::wvalue res;
 
-  int32_t start = tok->first(), end = tok->next();
-  std::string str;
-  while (end != icu::BreakIterator::DONE) {
-    txt.tempSubStringBetween(start, end).toUTF8String(str);
-    result.push_back(std::move(str));
-    start = end;
-    end = tok->next();
-  }
+    auto sentences = tokenizer::TokenizeToSentences(s);
+    for (const auto &sentence : sentences) {
+        auto coordinates = regex_str::ExtractCoordinates(sentence);
+        for (const auto &coordinate : coordinates) {
+            res[coordinate::CoordinatesToString(coordinate.lat, coordinate.lon)] =
 
-  return result;
+                // times 2, because cyrillic
+                sentence.substr(0, PREF_SENT_SIZE * 2);
+        }
+    }
+    return res;
 }
 
-// not finished yet
-std::vector<std::pair<std::vector<regex_str::MatchInfo>, std::string>>
-find_sets(const std::string &s) {}
+crow::json::wvalue FindCoordinateNames(const std::string &s) {
+    crow::json::wvalue res;
+    auto words = tokenizer::TokenizeToWords(s);
+    auto coordinates = regex_str::ExtractCoordinates(s);
+    auto results = woords_with_coords::CollectWordsAroundCoords(words, coordinates, 2);
+    for (const auto &wor_cord : results) {
+        res[coordinate::CoordinatesToString(wor_cord.coord.lat, wor_cord.coord.lon)] =
+            tokenizer::Concat(wor_cord.context);
+    }
 
-std::vector<std::pair<regex_str::MatchInfo, std::string>>
-find_coordinate_200_sentences(const std::string &s) {}
-
-std::vector<std::pair<regex_str::MatchInfo, std::string>>
-find_coordinate_names(const std::string &s) {}
-
-crow::json::wvalue process(std::string str) {
-
-  std::vector<std::pair<std::vector<regex_str::MatchInfo>, std::string>>
-      third_ans = find_sets(str);
-
-  std::vector<std::pair<regex_str::MatchInfo, std::string>> fourth_ans =
-      find_coordinate_200_sentences(str);
-
-  std::vector<std::pair<regex_str::MatchInfo, std::string>> fifth_ans =
-      find_coordinate_names(str);
-
-  crow::json::wvalue res;
-  res["sets"] = third_ans;
-  res["coordinates_sentences"] = fourth_ans;
-  res["coordinates_names"] = fifth_ans;
-
-  return res;
+    return res;
 }
 
-crow::json::wvalue post_proccessing(const crow::request &req) {
-  return process(crow::json::load(req.body)["text"].s());
+crow::json::wvalue Process(std::string str) {
+
+    crow::json::wvalue res = {};
+
+    res["sets"] = FindSets(str);
+    res["coordinates_sentences"] = FindCoordinate200Sentences(str);
+    res["coordinates_names"] = FindCoordinateNames(str);
+
+    return res;
 }
 
-void server_work() {
-  crow::SimpleApp app;
+crow::json::wvalue PostProccessing(const crow::request &req) {
+    auto rv = crow::json::load(req.body);
+    auto txt = rv["text"];
+    auto str = txt.s();
 
-  CROW_ROUTE(app, "/process_coordinates")
-      .methods("POST"_method)(post_proccessing);
-
-  app.port(8080).multithreaded().run();
+    return Process(std::move(str));
 }
 
-int main() { server_work(); }
+void ServerWork() {
+    crow::SimpleApp app;
+
+    CROW_ROUTE(app, "/process_coordinates").methods("POST"_method)(PostProccessing);
+
+    app.port(8080).multithreaded().run();
+}
+
+int main() {
+    ServerWork();
+}
